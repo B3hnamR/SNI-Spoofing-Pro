@@ -1,6 +1,22 @@
 # SNI-Spoofing
 Bypass DPI with IP/TCP header manipulation.
 
+## Fork Notice
+This repository (`B3hnamR/SNI-Spoofing-Pro`) is based on the original project:
+- Original upstream: `patterniha/SNI-Spoofing`
+- Upstream URL: https://github.com/patterniha/SNI-Spoofing
+
+## Acknowledgment
+Special thanks to **patterniha** for the original work and foundation of this project.
+
+## Donation
+Support ongoing development:
+
+- USDT (BEP20): `0x76a768B53Ca77B43086946315f0BDF21156bF424`
+- USDT (TRC20): `TU5gKvKqcXPn8itp1DouBCwcqGHMemBm8o`
+- Telegram: https://t.me/projectXhttp
+- Telegram: https://t.me/patterniha
+
 ## Platform Model
 - Windows: WinDivert (`pydivert`) path
 - Linux (Ubuntu): Active interception with `NFQUEUE` (not passive sniff-only)
