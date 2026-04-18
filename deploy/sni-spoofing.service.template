@@ -1,0 +1,21 @@
+[Unit]
+Description=SNI Spoofing NFQUEUE Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+ExecStart=__PYTHON__ __WORKDIR__/main.py
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+Environment=PYTHONUNBUFFERED=1
+User=root
+Group=root
+LimitNOFILE=1048576
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+
