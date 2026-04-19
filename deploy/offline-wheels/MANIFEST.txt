@@ -1,0 +1,2 @@
+﻿netfilterqueue-1.1.0-cp312-cp312-linux_x86_64.whl	277851
+scapy-2.7.0-py3-none-any.whl	2590982
