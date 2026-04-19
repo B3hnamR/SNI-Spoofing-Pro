@@ -19,7 +19,8 @@ Support ongoing development:
 - Telegram: https://t.me/patterniha
 
 ## Showcase
-![SNI Manager Showcase](docs/showcase/manager-ui-showcase.svg)
+![SNI Manager Showcase](docs/showcase/showcase1.png)
+![Connection_Proof](docs/showcase/showcase2.png)
 
 Ubuntu manager UI with grouped operations, scanner integration, and live service/config state.
 
