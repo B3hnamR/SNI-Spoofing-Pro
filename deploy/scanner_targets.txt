@@ -3,5 +3,5 @@
 # and can apply best candidate directly to config.json.
 
 dashboard.hcaptcha.com
-104.19.229.21
+104.19.230.21
 auth.vercel.com

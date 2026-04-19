@@ -457,6 +457,7 @@ show_dashboard() {
   echo
   echo -e "${C_BOLD}Current Config${C_RESET}"
   if [[ -f "${APP_CONFIG}" ]]; then
+    echo "  SERVICE_STATE: ${active}, ${enabled}"
     echo "  LISTEN:    $(config_get LISTEN_HOST):$(config_get LISTEN_PORT)"
     echo "  TARGET:    $(config_get CONNECT_IP):$(config_get CONNECT_PORT)"
     echo "  FAKE_SNI:  $(config_get FAKE_SNI)"
@@ -745,9 +746,9 @@ ensure_scanner_targets_file() {
   cat > "${targets_file}" <<EOF
 # One target per line (domain or IPv4)
 $(config_get FAKE_SNI "dashboard.hcaptcha.com")
-$(config_get CONNECT_IP "104.19.229.21")
+$(config_get CONNECT_IP "104.19.230.21")
 dashboard.hcaptcha.com
-104.19.229.21
+104.19.230.21
 EOF
   ok "Created scanner targets file: ${targets_file}"
 }
@@ -774,10 +775,23 @@ show_latest_scanner_report() {
     warn "No scanner report found in ${report_dir}"
     return 1
   fi
-  echo -e "${C_BOLD}Latest Scanner Report${C_RESET}"
+  echo -e "${C_BOLD}Latest Scanner Report (summary view)${C_RESET}"
   echo "${latest_txt}"
   echo "${SEPARATOR}"
-  cat "${latest_txt}"
+  awk '
+    BEGIN { section="" }
+    /^=== SNI SCAN SUMMARY ===$/ { section="summary"; print; next }
+    /^=== BEST CANDIDATE ===$/ { section="best"; print; next }
+    /^=== APPLIED TO CONFIG ===$/ { section="applied"; print; next }
+    /^=== / {
+      if ($0 != "=== SNI SCAN SUMMARY ===" && $0 != "=== BEST CANDIDATE ===" && $0 != "=== APPLIED TO CONFIG ===") {
+        section=""
+      }
+    }
+    section != "" { print }
+  ' "${latest_txt}"
+  echo
+  echo "Full report file: ${latest_txt}"
 }
 
 run_sni_scanner_apply_best() {

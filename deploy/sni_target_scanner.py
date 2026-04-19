@@ -236,13 +236,18 @@ def _apply_candidate_to_config(config_path: Path, cand: TargetResult, set_fake_s
 
 
 def _format_line(result: TargetResult) -> str:
-    bits: list[str] = []
-    for probe in result.probes:
-        if probe.open:
-            lat = f"@{probe.latency_ms}ms" if probe.latency_ms is not None else ""
-            bits.append(f"{probe.port}:OPEN{lat}")
-        else:
-            bits.append(f"{probe.port}:CLOSED")
+    total_ports = len(result.probes)
+    open_ports = len(result.open_ports)
+    best_port = result.best_port or "-"
+    if result.best_latency_ms is None:
+        best_lat = "-"
+    else:
+        best_lat = f"{result.best_latency_ms}ms"
+
+    bits: list[str] = [
+        f"tcp_open={open_ports}/{total_ports}",
+        f"best={best_port}@{best_lat}",
+    ]
 
     if result.e2e_checked:
         bits.append(
@@ -379,13 +384,15 @@ def _run_e2e_validation(
 
         time.sleep(max(0.0, settle_s))
 
+        first_probe_err = ""
         for _ in range(attempts):
             ok_probe, err_probe = _local_listener_probe(probe_host, probe_port, probe_timeout, probe_hold)
             if ok_probe:
                 cand.e2e_local_probe_ok += 1
             else:
                 cand.e2e_local_probe_fail += 1
-                _warn(f"local probe failed: {err_probe}")
+                if not first_probe_err:
+                    first_probe_err = err_probe
             time.sleep(0.15)
 
         time.sleep(0.5)
@@ -400,10 +407,19 @@ def _run_e2e_validation(
         cand.e2e_bypass_fail = bypass_fail
         cand.e2e_success_rate = (relay_ok * 100.0 / attempts) if attempts > 0 else 0.0
 
+        local_part = f"probe_ok={cand.e2e_local_probe_ok}/{attempts} probe_fail={cand.e2e_local_probe_fail}"
+        if first_probe_err:
+            local_part += f" first_probe_err={first_probe_err}"
         if relay_ok > 0:
-            _ok(f"E2E relay={relay_ok}/{attempts} bypass_fail={bypass_fail} rate={cand.e2e_success_rate:.1f}%")
+            _ok(
+                f"E2E relay={relay_ok}/{attempts} bypass_fail={bypass_fail} "
+                f"{local_part} rate={cand.e2e_success_rate:.1f}%"
+            )
         else:
-            _warn(f"E2E relay=0/{attempts} bypass_fail={bypass_fail}")
+            _warn(
+                f"E2E relay=0/{attempts} bypass_fail={bypass_fail} "
+                f"{local_part} rate={cand.e2e_success_rate:.1f}%"
+            )
 
     return True, ""
 

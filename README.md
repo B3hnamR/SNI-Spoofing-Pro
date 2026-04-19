@@ -1,9 +1,19 @@
 # SNI-Spoofing-Pro
 Bypass DPI with IP/TCP header manipulation.
 
+## One-Line Install (Ubuntu Server)
+```bash
+sudo bash -c 'set -e; cd /root; if [ ! -d SNI-Spoofing-Pro ]; then git clone https://github.com/B3hnamR/SNI-Spoofing-Pro.git; fi; cd SNI-Spoofing-Pro; git pull --ff-only; chmod +x deploy/sni-manager.sh; ./deploy/sni-manager.sh'
+```
+
+This command installs/updates and opens the interactive manager.
+
+## Showcase
+![SNI Manager Showcase](docs/showcase/showcase1.png)
+![Connection Proof](docs/showcase/showcase2.png)
+
 ## Fork Notice
 This repository is the main maintained fork in this account, based on:
-
 - Upstream: `patterniha/SNI-Spoofing`
 - Upstream URL: https://github.com/patterniha/SNI-Spoofing
 
@@ -12,81 +22,64 @@ Special thanks to **patterniha** for the original project and foundation.
 
 ## Donation
 Support ongoing development:
-
 - USDT (BEP20): `0x76a768B53Ca77B43086946315f0BDF21156bF424`
 - USDT (TRC20): `TU5gKvKqcXPn8itp1DouBCwcqGHMemBm8o`
 - Telegram: https://t.me/projectXhttp
 - Telegram: https://t.me/patterniha
 
-## Showcase
-![SNI Manager Showcase](docs/showcase/showcase1.png)
-![Connection Proof](docs/showcase/showcase2.png)
-
-Ubuntu manager UI with grouped operations, scanner integration, and live service/config state.
-
 ## Platform Model
-- Windows: WinDivert (`pydivert`) injection path
-- Linux (Ubuntu): active interception via `NFQUEUE` + `iptables` (not passive sniff-only)
+- Windows: WinDivert (`pydivert`) path
+- Linux (Ubuntu): active interception with `NFQUEUE` + raw packet injection (not passive sniff-only)
 
-## How Linux Path Works
-1. Handshake packets are redirected to `NFQUEUE`.
-2. Outbound ACK is held.
-3. Fake TLS packet is injected (`wrong_seq`).
-4. Held packet is accepted immediately after fake send.
-5. Relay starts only when bypass handshake succeeds.
+## How Linux Mode Works
+1. TCP handshake packets are redirected to `NFQUEUE`.
+2. Outbound ACK is held in queue.
+3. Fake TLS packet (`wrong_seq`) is injected.
+4. Held packet is accepted immediately after fake injection.
+5. Relay starts only when bypass handshake is confirmed.
 
-## Runtime Features
-- Structured logs (`LOG_LEVEL`, optional `LOG_FILE`)
-- Client SNI extraction and periodic stats (`LOG_CLIENT_SNI`, `STATS_INTERVAL`)
-- IP-based rate limiting (`RATE_LIMIT`)
-- Connection cap (`MAX_CONNECTIONS`)
-- Idle timeout (`IDLE_TIMEOUT`)
-- Resource pressure backoff (`RESOURCE_PRESSURE_BACKOFF`)
-- Browser profile modes (`legacy`, `random`, `chrome`, `firefox`, `safari`, `edge`)
-- Fake-send worker pool (`FAKE_SEND_WORKERS`)
-- Optional TTL spoofing (`TTL_SPOOF`)
+## Key Features
+- Structured logging (`LOG_LEVEL`, optional `LOG_FILE`)
+- SNI extraction and periodic stats (`LOG_CLIENT_SNI`, `STATS_INTERVAL`)
+- Rate limit and connection limits (`RATE_LIMIT`, `MAX_CONNECTIONS`)
+- Idle timeout and resource backoff (`IDLE_TIMEOUT`, `RESOURCE_PRESSURE_BACKOFF`)
+- TLS profile control (`BROWSER_PROFILE`)
+- Worker-based fake send (`FAKE_SEND_WORKERS`)
 - NFQUEUE hardening (`NFQUEUE_MAXLEN`, `NFQUEUE_FAIL_OPEN`, `NARROW_NFQUEUE_FILTER`)
+- Production manager UI with grouped operations
+- Integrated scanner with:
+  - TCP pre-scan
+  - E2E bypass validation
+  - auto-rollback if E2E result is bad
+  - JSON/TXT reports
 
-## Requirements (Ubuntu)
-```bash
-sudo apt update
-sudo apt install -y \
-  python3 python3-pip python3-dev \
-  build-essential libpcap-dev libnetfilter-queue-dev \
-  iptables logrotate ca-certificates iputils-ping
-```
+## Default Config (First Install)
+`config.json` default:
 
-Python deps are platform-aware in `requirements.txt`:
-- Windows: `pydivert`
-- Linux: `scapy`, `NetfilterQueue`
-
-Linux execution requires root (`sudo`) for NFQUEUE/iptables/raw packet operations.
-
-## Default Config (Bundled `config.json`)
 ```json
 {
-  "LISTEN_HOST": "127.0.0.1",
+  "LISTEN_HOST": "0.0.0.0",
   "LISTEN_PORT": 40443,
-  "CONNECT_IP": "104.19.229.21",
+  "CONNECT_IP": "104.19.230.21",
   "CONNECT_PORT": 443,
   "FAKE_SNI": "dashboard.hcaptcha.com",
   "NFQUEUE_NUM": 1,
-  "NFQUEUE_MAXLEN": 4096,
+  "NFQUEUE_MAXLEN": 16384,
   "NFQUEUE_FAIL_OPEN": true,
-  "NARROW_NFQUEUE_FILTER": true,
-  "BYPASS_TIMEOUT": 2.0,
+  "NARROW_NFQUEUE_FILTER": false,
+  "BYPASS_TIMEOUT": 8.0,
   "CONNECT_TIMEOUT": 5.0,
-  "FAKE_DELAY_MS": 1.0,
+  "FAKE_DELAY_MS": 0.0,
   "BROWSER_PROFILE": "random",
-  "TTL_SPOOF": true,
-  "FAKE_SEND_WORKERS": 2,
+  "TTL_SPOOF": false,
+  "FAKE_SEND_WORKERS": 4,
   "RECV_BUFFER": 65536,
   "MAX_CONNECTIONS": 0,
   "IDLE_TIMEOUT": 120,
   "RATE_LIMIT": 0,
-  "HANDLE_LIMIT": 256,
-  "ACCEPT_BACKLOG": 256,
-  "RESOURCE_PRESSURE_BACKOFF": 0.5,
+  "HANDLE_LIMIT": 512,
+  "ACCEPT_BACKLOG": 512,
+  "RESOURCE_PRESSURE_BACKOFF": 0.3,
   "LOG_LEVEL": "INFO",
   "LOG_FILE": "",
   "LOG_CLIENT_SNI": true,
@@ -94,28 +87,23 @@ Linux execution requires root (`sudo`) for NFQUEUE/iptables/raw packet operation
 }
 ```
 
-## Quick Run
-Linux:
+## Requirements (Ubuntu)
 ```bash
-sudo python3 main.py
+sudo apt update
+sudo apt install -y \
+  git python3 python3-pip python3-dev \
+  build-essential libpcap-dev libnetfilter-queue-dev \
+  iptables logrotate ca-certificates iputils-ping
 ```
 
-Windows:
-```bash
-python main.py
-```
+Python dependencies are platform-aware in `requirements.txt`:
+- Windows: `pydivert`
+- Linux: `scapy`, `NetfilterQueue`
 
-## Production Deployment
-Assets in `deploy/`:
-- `sni-manager.sh`
-- `install-production.sh`
-- `sni_target_scanner.py`
-- `scanner_targets.txt`
-- `healthcheck.py`
-- `sni-spoofing.service.template`
-- `logrotate-sni-spoofing.conf`
+Run with root privileges on Linux (`sudo`) for `NFQUEUE` + raw packet operations.
 
-### Option A: Unified Manager (Recommended)
+## Deployment Modes
+### A) Unified Manager (Recommended)
 ```bash
 cd /path/to/SNI-Spoofing-Pro
 chmod +x deploy/sni-manager.sh
@@ -123,46 +111,44 @@ sudo ./deploy/sni-manager.sh
 ```
 
 Behavior:
-- First run auto-installs dependencies + service + logrotate, then opens menu.
-- Next runs open menu directly.
-- After config changes, manager runs validation and connectivity checks.
+- First run: installs dependencies, deploys to `/opt/sni-spoofing`, installs systemd/logrotate, starts service, opens menu.
+- Next runs: open menu directly.
 
-Menu groups:
-- Service: start/stop/restart/reset/status
-- Logs: journal/app logs/logrotate
-- Config & Scanner: healthcheck/validate/wizard/editor/scanner/report tools
-- Network & NFQUEUE: tuning/rules/connectivity/dependency repair
-- Maintenance: backup/restore/upgrade/uninstall
+Manager dashboard shows:
+- Installation state
+- Current config
+- `SERVICE_STATE` (`active/inactive`, `enabled/disabled`)
 
-Connectivity check (`option 22`) policy:
-- TCP reachability to `CONNECT_IP:CONNECT_PORT` is the pass/fail criterion.
-- DNS and ICMP ping results are informational only.
-
-### Option B: Non-interactive Installer
+### B) Non-Interactive Installer
 ```bash
 cd /path/to/SNI-Spoofing-Pro
 chmod +x deploy/install-production.sh
 sudo ./deploy/install-production.sh
 ```
 
-## Integrated Scanner
-Built-in scanner inspired by `seramo/sni-scanner`.
-
-Files:
+## Scanner (Option 24)
+Integrated scanner files:
 - `deploy/sni_target_scanner.py`
 - `deploy/scanner_targets.txt`
 
 What it does:
-- Resolves target hostnames to IPv4
-- Probes ports (default: `443,2053,2083,2087,2096,8443`)
-- Ranks candidates by preferred port + latency
-- Optional E2E bypass validation on top candidates (service restart + local probe + journal analysis)
-- Auto-rollback to previous config if applied E2E result has zero relay success
-- Stores reports in:
-  - `/var/log/sni-spoofing/scanner/sni-scan-*.json`
-  - `/var/log/sni-spoofing/scanner/sni-scan-*.txt`
-- Chooses best reachable candidate
-- Can update config directly (`CONNECT_IP`, `CONNECT_PORT`, `FAKE_SNI`)
+1. Resolve domain targets to IPv4.
+2. Probe TCP ports (default: `443,2053,2083,2087,2096,8443`).
+3. Rank candidates by preferred port and latency.
+4. Run E2E validation on top candidates:
+   - temporary config apply
+   - service restart
+   - local listener probes
+   - journal analysis for `RELAY` / bypass failures
+5. Apply best candidate or rollback automatically when E2E score is zero.
+6. Save reports:
+   - `/var/log/sni-spoofing/scanner/sni-scan-*.json`
+   - `/var/log/sni-spoofing/scanner/sni-scan-*.txt`
+
+Manager shortcuts:
+- `24`: run scanner (`TCP + E2E`) and apply best/rollback
+- `25`: edit scanner targets list
+- `26`: show latest scanner report (summary view)
 
 Direct run:
 ```bash
@@ -177,24 +163,18 @@ sudo python3 /opt/sni-spoofing/deploy/sni_target_scanner.py \
   --apply-best
 ```
 
-Manager shortcuts:
-- `24`: run scanner (`TCP + E2E`) + apply best or auto-rollback
-- `25`: edit targets list
-- `26`: show latest report
+## Offline Install (No PyPI Access)
+This repo now includes local wheels in:
+- `deploy/offline-wheels/`
 
-## Offline Fallback Install (No PyPI Access)
-If server cannot access `pypi.org`, place an offline bundle tar in source root:
+Installer order:
+1. try local wheelhouse (`deploy/offline-wheels`)
+2. try normal pip
+3. retry with `--break-system-packages` (PEP 668)
+4. fallback from optional bundle tar:
+   - `sni-spoofing-offline-bundle-*.tar.gz`
 
-- `sni-spoofing-offline-bundle-*.tar.gz`
-
-Installer flow:
-1. Try normal pip install
-2. Retry with `--break-system-packages`
-3. Fallback to offline bundle (`--no-index --find-links`)
-
-Supported in both:
-- `deploy/install-production.sh`
-- `deploy/sni-manager.sh` (bootstrap + repair path)
+So on blocked networks, keep the project complete (including `deploy/offline-wheels`) and run manager/install script.
 
 ## Healthcheck
 ```bash
@@ -203,11 +183,18 @@ sudo python3 /opt/sni-spoofing/deploy/healthcheck.py \
   --systemd-unit sni-spoofing.service
 ```
 
-Checks:
-- Config readability
-- Port sanity
-- systemd unit state
-- Local TCP listener reachability
+Healthcheck validates:
+- config parse
+- listen port sanity
+- systemd active state
+- local TCP listener reachability
+
+## Useful Commands
+```bash
+sudo systemctl restart sni-spoofing
+sudo systemctl status sni-spoofing --no-pager
+sudo journalctl -u sni-spoofing -f
+```
 
 ## Manual NFQUEUE Rules (Template)
 Example queue `1`:
@@ -218,11 +205,4 @@ sudo iptables -I INPUT 1 -p tcp -s <CONNECT_IP> -d <LOCAL_IP> --sport <CONNECT_P
 sudo iptables -I INPUT 1 -p tcp -s <CONNECT_IP> -d <LOCAL_IP> --sport <CONNECT_PORT> --tcp-flags SYN,ACK,FIN,RST,PSH ACK -m comment --comment sni-spoof-nfq-1 -j NFQUEUE --queue-num 1 --queue-bypass
 ```
 
-If `NFQUEUE_FAIL_OPEN=false`, remove `--queue-bypass` from manual rules.
-
-## Useful Commands
-```bash
-sudo systemctl restart sni-spoofing
-sudo systemctl status sni-spoofing --no-pager
-sudo journalctl -u sni-spoofing -f
-```
+If `NFQUEUE_FAIL_OPEN=false`, remove `--queue-bypass` from rules.
