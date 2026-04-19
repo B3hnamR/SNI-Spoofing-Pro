@@ -121,6 +121,7 @@ Deployment assets:
 - `deploy/sni-manager.sh`
 - `deploy/sni_target_scanner.py`
 - `deploy/scanner_targets.txt`
+- `deploy/build-offline-bundle.sh`
 
 ### Option A: Unified Manager (Recommended)
 ```bash
@@ -202,6 +203,36 @@ cd /path/to/SNI-Spoofing-Pro
 chmod +x deploy/install-production.sh
 sudo ./deploy/install-production.sh
 ```
+
+## Offline Bundle (No Direct PyPI Access)
+If your target servers cannot reach `pypi.org`, build an offline bundle on an internet-connected Linux server, then transfer it.
+
+### Step 1 (Online Server): Build bundle
+```bash
+cd /path/to/SNI-Spoofing-Pro
+chmod +x deploy/build-offline-bundle.sh
+./deploy/build-offline-bundle.sh
+```
+
+What this does:
+- builds wheels into `deploy/offline-wheels`
+- creates bundle tarball like:
+  - `../sni-spoofing-offline-bundle-YYYYmmdd-HHMMSS.tar.gz`
+
+### Step 2 (Transfer)
+Copy the generated tarball to your offline/limited server.
+
+### Step 3 (Offline Server): Install
+```bash
+tar -xzf sni-spoofing-offline-bundle-*.tar.gz
+cd SNI-Spoofing-Pro
+chmod +x deploy/install-production.sh
+sudo ./deploy/install-production.sh
+```
+
+`install-production.sh` and `sni-manager.sh` now auto-detect local wheelhouse:
+- `/opt/sni-spoofing/deploy/offline-wheels`
+and install Python deps from there (`--no-index --find-links`) without contacting PyPI.
 
 ## Healthcheck
 ```bash

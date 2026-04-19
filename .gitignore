@@ -25,6 +25,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+deploy/offline-wheels/*.whl
+deploy/offline-wheels/MANIFEST.txt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

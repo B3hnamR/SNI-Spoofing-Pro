@@ -11,6 +11,7 @@ SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET_DIR="${TARGET_DIR:-/opt/sni-spoofing}"
 SERVICE_NAME="${SERVICE_NAME:-sni-spoofing}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+OFFLINE_WHEEL_DIR="${OFFLINE_WHEEL_DIR:-}"
 
 if [[ "${TARGET_DIR}" == "/" || "${TARGET_DIR}" == "/opt" || "${TARGET_DIR}" == "" ]]; then
   echo "Unsafe TARGET_DIR=${TARGET_DIR}"
@@ -22,19 +23,35 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 
-echo "[1/6] Installing app files to ${TARGET_DIR}"
+echo "[1/7] Installing system dependencies"
+apt-get update -y
+apt-get install -y \
+  python3 python3-pip python3-dev \
+  build-essential libpcap-dev libnetfilter-queue-dev \
+  iptables logrotate ca-certificates iputils-ping
+
+echo "[2/7] Installing app files to ${TARGET_DIR}"
 rm -rf "${TARGET_DIR}"
 mkdir -p "${TARGET_DIR}"
 cp -a "${SOURCE_DIR}/." "${TARGET_DIR}/"
 find "${TARGET_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-echo "[2/6] Installing Python dependencies"
-if ! "${PYTHON_BIN}" -m pip install -r "${TARGET_DIR}/requirements.txt"; then
-  echo "Default pip install failed, retrying with --break-system-packages"
-  "${PYTHON_BIN}" -m pip install --break-system-packages -r "${TARGET_DIR}/requirements.txt"
+WHEEL_DIR="${OFFLINE_WHEEL_DIR:-${TARGET_DIR}/deploy/offline-wheels}"
+echo "[3/7] Installing Python dependencies"
+if [[ -d "${WHEEL_DIR}" ]] && compgen -G "${WHEEL_DIR}/*.whl" >/dev/null 2>&1; then
+  echo "Using offline wheelhouse: ${WHEEL_DIR}"
+  if ! "${PYTHON_BIN}" -m pip install --no-index --find-links "${WHEEL_DIR}" -r "${TARGET_DIR}/requirements.txt"; then
+    echo "Offline install failed, retrying with --break-system-packages"
+    "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${WHEEL_DIR}" -r "${TARGET_DIR}/requirements.txt"
+  fi
+else
+  if ! "${PYTHON_BIN}" -m pip install -r "${TARGET_DIR}/requirements.txt"; then
+    echo "Default pip install failed, retrying with --break-system-packages"
+    "${PYTHON_BIN}" -m pip install --break-system-packages -r "${TARGET_DIR}/requirements.txt"
+  fi
 fi
 
-echo "[2.1/6] Verifying Python modules (netfilterqueue, scapy)"
+echo "[3.1/7] Verifying Python modules (netfilterqueue, scapy)"
 "${PYTHON_BIN}" - <<'PY'
 import importlib
 import sys
@@ -49,7 +66,7 @@ for mod in checks:
 print("python-modules-ok")
 PY
 
-echo "[3/6] Preparing runtime logs"
+echo "[4/7] Preparing runtime logs"
 mkdir -p /var/log/sni-spoofing
 chown root:root /var/log/sni-spoofing
 chmod 0755 /var/log/sni-spoofing
@@ -58,7 +75,7 @@ if ! grep -q '"LOG_FILE"' "${TARGET_DIR}/config.json"; then
   echo "Warning: LOG_FILE not found in config.json"
 fi
 
-echo "[4/6] Installing systemd unit ${SERVICE_NAME}.service"
+echo "[5/7] Installing systemd unit ${SERVICE_NAME}.service"
 SERVICE_TEMPLATE="${TARGET_DIR}/deploy/sni-spoofing.service.template"
 SERVICE_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
 sed \
@@ -66,10 +83,10 @@ sed \
   -e "s|__PYTHON__|${PYTHON_BIN}|g" \
   "${SERVICE_TEMPLATE}" > "${SERVICE_DEST}"
 
-echo "[5/6] Installing logrotate config"
+echo "[6/7] Installing logrotate config"
 cp "${TARGET_DIR}/deploy/logrotate-sni-spoofing.conf" "/etc/logrotate.d/${SERVICE_NAME}"
 
-echo "[6/6] Enabling and restarting service"
+echo "[7/7] Enabling and restarting service"
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"

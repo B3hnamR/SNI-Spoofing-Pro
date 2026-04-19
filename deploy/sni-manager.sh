@@ -218,6 +218,17 @@ sync_source_to_target() {
 
 install_python_deps() {
   info "Installing Python dependencies"
+  local wheel_dir="${OFFLINE_WHEEL_DIR:-${TARGET_DIR}/deploy/offline-wheels}"
+  if [[ -d "${wheel_dir}" ]] && compgen -G "${wheel_dir}/*.whl" >/dev/null 2>&1; then
+    info "Using offline wheelhouse: ${wheel_dir}"
+    if "${PYTHON_BIN}" -m pip install --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"; then
+      return 0
+    fi
+    warn "Offline install failed. Retrying with --break-system-packages."
+    "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"
+    return 0
+  fi
+
   if "${PYTHON_BIN}" -m pip install -r "${APP_REQUIREMENTS}"; then
     return 0
   fi
