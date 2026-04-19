@@ -121,7 +121,6 @@ Deployment assets:
 - `deploy/sni-manager.sh`
 - `deploy/sni_target_scanner.py`
 - `deploy/scanner_targets.txt`
-- `deploy/build-offline-bundle.sh`
 
 ### Option A: Unified Manager (Recommended)
 ```bash
@@ -157,7 +156,7 @@ Manager menu operations:
 19. Force logrotate
 20. Upgrade/reinstall from current source
 21. Uninstall
-22. Connectivity check (DNS + ping + TCP)
+22. Connectivity check (TCP + DNS/Ping info)
 23. Repair Python deps (NetfilterQueue/Scapy)
 24. Run SNI scanner + apply best to config
 25. Edit scanner targets list
@@ -204,35 +203,19 @@ chmod +x deploy/install-production.sh
 sudo ./deploy/install-production.sh
 ```
 
-## Offline Bundle (No Direct PyPI Access)
-If your target servers cannot reach `pypi.org`, build an offline bundle on an internet-connected Linux server, then transfer it.
+## Offline Fallback (Tar In Source)
+If your server cannot reach `pypi.org`, place an offline bundle file in source root with this pattern:
 
-### Step 1 (Online Server): Build bundle
-```bash
-cd /path/to/SNI-Spoofing-Pro
-chmod +x deploy/build-offline-bundle.sh
-./deploy/build-offline-bundle.sh
-```
+- `sni-spoofing-offline-bundle-*.tar.gz`
 
-What this does:
-- builds wheels into `deploy/offline-wheels`
-- creates bundle tarball like:
-  - `../sni-spoofing-offline-bundle-YYYYmmdd-HHMMSS.tar.gz`
+During install, scripts automatically try:
+1. normal online pip install
+2. `--break-system-packages`
+3. automatic fallback from bundle tar (extract wheels and install with `--no-index`)
 
-### Step 2 (Transfer)
-Copy the generated tarball to your offline/limited server.
-
-### Step 3 (Offline Server): Install
-```bash
-tar -xzf sni-spoofing-offline-bundle-*.tar.gz
-cd SNI-Spoofing-Pro
-chmod +x deploy/install-production.sh
-sudo ./deploy/install-production.sh
-```
-
-`install-production.sh` and `sni-manager.sh` now auto-detect local wheelhouse:
-- `/opt/sni-spoofing/deploy/offline-wheels`
-and install Python deps from there (`--no-index --find-links`) without contacting PyPI.
+This works in both:
+- `deploy/install-production.sh`
+- `deploy/sni-manager.sh` bootstrap/repair flow
 
 ## Healthcheck
 ```bash

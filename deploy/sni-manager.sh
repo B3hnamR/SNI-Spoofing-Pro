@@ -29,6 +29,9 @@ if [[ -t 1 ]]; then
   C_YELLOW="\033[38;5;220m"
   C_RED="\033[38;5;196m"
   C_CYAN="\033[38;5;81m"
+  C_MAGENTA="\033[38;5;141m"
+  C_ORANGE="\033[38;5;215m"
+  C_SILVER="\033[38;5;250m"
 else
   C_RESET=""
   C_BOLD=""
@@ -38,6 +41,9 @@ else
   C_YELLOW=""
   C_RED=""
   C_CYAN=""
+  C_MAGENTA=""
+  C_ORANGE=""
+  C_SILVER=""
 fi
 
 print_banner() {
@@ -53,6 +59,19 @@ info() { echo -e "${C_CYAN}[INFO]${C_RESET} $*"; }
 ok() { echo -e "${C_GREEN}[OK]${C_RESET} $*"; }
 warn() { echo -e "${C_YELLOW}[WARN]${C_RESET} $*"; }
 err() { echo -e "${C_RED}[ERR]${C_RESET} $*"; }
+
+menu_header() {
+  local title="$1"
+  local color="$2"
+  echo -e "${C_BOLD}${color}${title}${C_RESET}"
+}
+
+menu_item() {
+  local color="$1"
+  local idx="$2"
+  local text="$3"
+  printf " ${color}%2s)${C_RESET} %s\n" "${idx}" "${text}"
+}
 
 pause() {
   echo
@@ -216,16 +235,69 @@ sync_source_to_target() {
   find "${TARGET_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} +
 }
 
-install_python_deps() {
-  info "Installing Python dependencies"
-  local wheel_dir="${OFFLINE_WHEEL_DIR:-${TARGET_DIR}/deploy/offline-wheels}"
-  if [[ -d "${wheel_dir}" ]] && compgen -G "${wheel_dir}/*.whl" >/dev/null 2>&1; then
-    info "Using offline wheelhouse: ${wheel_dir}"
-    if "${PYTHON_BIN}" -m pip install --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"; then
+find_offline_bundle_file() {
+  local candidate=""
+  for candidate in \
+    "${SOURCE_DIR}"/sni-spoofing-offline-bundle-*.tar.gz \
+    "${TARGET_DIR}"/sni-spoofing-offline-bundle-*.tar.gz
+  do
+    if [[ -f "${candidate}" ]]; then
+      printf "%s" "${candidate}"
       return 0
     fi
-    warn "Offline install failed. Retrying with --break-system-packages."
-    "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"
+  done
+  return 1
+}
+
+install_deps_from_wheel_dir() {
+  local wheel_dir="$1"
+  if [[ ! -d "${wheel_dir}" ]] || ! compgen -G "${wheel_dir}/*.whl" >/dev/null 2>&1; then
+    return 1
+  fi
+  info "Using wheelhouse: ${wheel_dir}"
+  if "${PYTHON_BIN}" -m pip install --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"; then
+    return 0
+  fi
+  warn "Wheelhouse install failed. Retrying with --break-system-packages."
+  "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${wheel_dir}" -r "${APP_REQUIREMENTS}"
+}
+
+install_deps_from_bundle() {
+  local bundle="$1"
+  if [[ ! -f "${bundle}" ]]; then
+    return 1
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local wheel_dir=""
+  info "Trying offline bundle fallback: ${bundle}"
+
+  if ! tar -xzf "${bundle}" -C "${tmp_dir}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  wheel_dir="$(find "${tmp_dir}" -type d -path "*/deploy/offline-wheels" | head -n 1 || true)"
+  if [[ -z "${wheel_dir}" ]]; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  if install_deps_from_wheel_dir "${wheel_dir}"; then
+    rm -rf "${tmp_dir}"
+    return 0
+  fi
+
+  rm -rf "${tmp_dir}"
+  return 1
+}
+
+install_python_deps() {
+  info "Installing Python dependencies"
+
+  local wheel_dir="${TARGET_DIR}/deploy/offline-wheels"
+  if install_deps_from_wheel_dir "${wheel_dir}"; then
     return 0
   fi
 
@@ -233,7 +305,19 @@ install_python_deps() {
     return 0
   fi
   warn "Default pip install failed. Retrying with --break-system-packages (Ubuntu PEP 668)."
-  "${PYTHON_BIN}" -m pip install --break-system-packages -r "${APP_REQUIREMENTS}"
+  if "${PYTHON_BIN}" -m pip install --break-system-packages -r "${APP_REQUIREMENTS}"; then
+    return 0
+  fi
+
+  local bundle=""
+  bundle="$(find_offline_bundle_file || true)"
+  if [[ -n "${bundle}" ]] && install_deps_from_bundle "${bundle}"; then
+    ok "Python dependencies installed from offline bundle."
+    return 0
+  fi
+
+  err "Failed to install Python dependencies (online and offline fallback)."
+  return 1
 }
 
 verify_required_python_modules() {
@@ -496,7 +580,7 @@ check_target_connectivity() {
   ip="$(config_get CONNECT_IP "")"
   port="$(config_get CONNECT_PORT "443")"
 
-  local failed=0
+  local tcp_ok=0
   local host_ips=""
 
   echo -e "${C_BOLD}Target Connectivity Check${C_RESET}"
@@ -512,23 +596,19 @@ check_target_connectivity() {
       ok "DNS resolve for ${host}: $(echo "${host_ips}" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
     else
       warn "DNS resolve failed for ${host}"
-      failed=1
     fi
 
     if command -v ping >/dev/null 2>&1; then
       if ping -c 1 -W 2 "${host}" >/dev/null 2>&1; then
         ok "Ping host succeeded: ${host}"
       else
-        warn "Ping host failed: ${host}"
-        failed=1
+        warn "Ping host failed: ${host} (informational)"
       fi
     else
-      warn "ping command is missing (install iputils-ping)"
-      failed=1
+      warn "ping command is missing (informational)"
     fi
   else
-    warn "FAKE_SNI is empty"
-    failed=1
+    warn "FAKE_SNI is empty (informational)"
   fi
 
   if [[ -n "${ip}" ]]; then
@@ -536,24 +616,21 @@ check_target_connectivity() {
       if ping -c 1 -W 2 "${ip}" >/dev/null 2>&1; then
         ok "Ping IP succeeded: ${ip}"
       else
-        warn "Ping IP failed: ${ip}"
-        failed=1
+        warn "Ping IP failed: ${ip} (informational)"
       fi
     else
-      warn "ping command is missing (install iputils-ping)"
-      failed=1
+      warn "ping command is missing (informational)"
     fi
 
     local tcp_msg=""
     tcp_msg="$(tcp_probe "${ip}" "${port}" 2>&1)" && {
       ok "${tcp_msg}"
+      tcp_ok=1
     } || {
-      warn "${tcp_msg}"
-      failed=1
+      err "${tcp_msg}"
     }
   else
-    warn "CONNECT_IP is empty"
-    failed=1
+    err "CONNECT_IP is empty"
   fi
 
   if [[ -n "${host_ips}" && -n "${ip}" ]]; then
@@ -564,12 +641,12 @@ check_target_connectivity() {
     fi
   fi
 
-  if [[ "${failed}" -eq 0 ]]; then
-    ok "Connectivity check passed."
+  if [[ "${tcp_ok}" -eq 1 ]]; then
+    ok "Connectivity check passed (TCP reachable)."
     return 0
   fi
 
-  warn "Connectivity check failed. Target may be unreachable from this server."
+  err "Connectivity check failed (TCP unreachable)."
   return 1
 }
 
@@ -888,34 +965,43 @@ uninstall_all() {
 menu_loop() {
   while true; do
     show_dashboard
-    echo -e "${C_BOLD}Operations${C_RESET}"
-    echo " 1) Start service"
-    echo " 2) Stop service"
-    echo " 3) Restart service"
-    echo " 4) Reset pipeline (cleanup NFQUEUE rules + restart)"
-    echo " 5) Service status (full)"
-    echo " 6) Live logs (journalctl -f)"
-    echo " 7) Recent logs + warnings"
-    echo " 8) App log file (recent)"
-    echo " 9) App log file (live tail)"
-    echo "10) Healthcheck"
-    echo "11) Validate config"
-    echo "12) Quick config wizard"
-    echo "13) Edit config file"
-    echo "14) Apply NFQUEUE tuning profile"
-    echo "15) Show NFQUEUE iptables rules"
-    echo "16) Cleanup NFQUEUE iptables rules"
-    echo "17) Backup config"
-    echo "18) Restore latest config backup"
-    echo "19) Force logrotate now"
-    echo "20) Upgrade/Reinstall from current source"
-    echo "21) Uninstall"
-    echo "22) Connectivity check (DNS + ping + TCP)"
-    echo "23) Repair Python deps (NetfilterQueue/Scapy)"
-    echo "24) Run SNI scanner + apply best to config"
-    echo "25) Edit scanner targets list"
-    echo "26) Show latest scanner report"
-    echo " 0) Exit"
+    menu_header "Operations" "${C_BLUE}"
+    menu_header " Service" "${C_GREEN}"
+    menu_item "${C_GREEN}" "1" "Start service"
+    menu_item "${C_GREEN}" "2" "Stop service"
+    menu_item "${C_GREEN}" "3" "Restart service"
+    menu_item "${C_GREEN}" "4" "Reset pipeline (cleanup NFQUEUE rules + restart)"
+    menu_item "${C_GREEN}" "5" "Service status (full)"
+
+    menu_header " Logs" "${C_ORANGE}"
+    menu_item "${C_ORANGE}" "6" "Live logs (journalctl -f)"
+    menu_item "${C_ORANGE}" "7" "Recent logs + warnings"
+    menu_item "${C_ORANGE}" "8" "App log file (recent)"
+    menu_item "${C_ORANGE}" "9" "App log file (live tail)"
+    menu_item "${C_ORANGE}" "19" "Force logrotate now"
+
+    menu_header " Config & Scanner" "${C_CYAN}"
+    menu_item "${C_CYAN}" "10" "Healthcheck"
+    menu_item "${C_CYAN}" "11" "Validate config"
+    menu_item "${C_CYAN}" "12" "Quick config wizard"
+    menu_item "${C_CYAN}" "13" "Edit config file"
+    menu_item "${C_CYAN}" "24" "Run SNI scanner + apply best to config"
+    menu_item "${C_CYAN}" "25" "Edit scanner targets list"
+    menu_item "${C_CYAN}" "26" "Show latest scanner report"
+
+    menu_header " Network & NFQUEUE" "${C_MAGENTA}"
+    menu_item "${C_MAGENTA}" "14" "Apply NFQUEUE tuning profile"
+    menu_item "${C_MAGENTA}" "15" "Show NFQUEUE iptables rules"
+    menu_item "${C_MAGENTA}" "16" "Cleanup NFQUEUE iptables rules"
+    menu_item "${C_MAGENTA}" "22" "Connectivity check (TCP + DNS/Ping info)"
+    menu_item "${C_MAGENTA}" "23" "Repair Python deps (NetfilterQueue/Scapy)"
+
+    menu_header " Maintenance" "${C_SILVER}"
+    menu_item "${C_SILVER}" "17" "Backup config"
+    menu_item "${C_SILVER}" "18" "Restore latest config backup"
+    menu_item "${C_SILVER}" "20" "Upgrade/Reinstall from current source"
+    menu_item "${C_RED}" "21" "Uninstall"
+    menu_item "${C_DIM}" "0" "Exit"
     echo
     read -r -p "Select option: " choice
     echo

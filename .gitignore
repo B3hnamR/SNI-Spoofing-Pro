@@ -25,8 +25,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-deploy/offline-wheels/*.whl
-deploy/offline-wheels/MANIFEST.txt
+sni-spoofing-offline-bundle-*.tar.gz
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

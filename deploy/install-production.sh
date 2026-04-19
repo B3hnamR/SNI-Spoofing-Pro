@@ -11,7 +11,6 @@ SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET_DIR="${TARGET_DIR:-/opt/sni-spoofing}"
 SERVICE_NAME="${SERVICE_NAME:-sni-spoofing}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
-OFFLINE_WHEEL_DIR="${OFFLINE_WHEEL_DIR:-}"
 
 if [[ "${TARGET_DIR}" == "/" || "${TARGET_DIR}" == "/opt" || "${TARGET_DIR}" == "" ]]; then
   echo "Unsafe TARGET_DIR=${TARGET_DIR}"
@@ -22,6 +21,56 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   echo "python3 not found"
   exit 1
 fi
+
+find_bundle_file() {
+  local candidate=""
+  for candidate in \
+    "${SOURCE_DIR}"/sni-spoofing-offline-bundle-*.tar.gz \
+    "${TARGET_DIR}"/sni-spoofing-offline-bundle-*.tar.gz
+  do
+    if [[ -f "${candidate}" ]]; then
+      printf "%s" "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_from_wheel_dir() {
+  local wheel_dir="$1"
+  if [[ ! -d "${wheel_dir}" ]] || ! compgen -G "${wheel_dir}/*.whl" >/dev/null 2>&1; then
+    return 1
+  fi
+  echo "Using wheelhouse: ${wheel_dir}"
+  if "${PYTHON_BIN}" -m pip install --no-index --find-links "${wheel_dir}" -r "${TARGET_DIR}/requirements.txt"; then
+    return 0
+  fi
+  echo "Wheelhouse install failed, retrying with --break-system-packages"
+  "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${wheel_dir}" -r "${TARGET_DIR}/requirements.txt"
+}
+
+install_from_bundle() {
+  local bundle="$1"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local wheel_dir=""
+  echo "Trying offline bundle fallback: ${bundle}"
+  if ! tar -xzf "${bundle}" -C "${tmp_dir}"; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+  wheel_dir="$(find "${tmp_dir}" -type d -path "*/deploy/offline-wheels" | head -n 1 || true)"
+  if [[ -z "${wheel_dir}" ]]; then
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+  if install_from_wheel_dir "${wheel_dir}"; then
+    rm -rf "${tmp_dir}"
+    return 0
+  fi
+  rm -rf "${tmp_dir}"
+  return 1
+}
 
 echo "[1/7] Installing system dependencies"
 apt-get update -y
@@ -36,18 +85,19 @@ mkdir -p "${TARGET_DIR}"
 cp -a "${SOURCE_DIR}/." "${TARGET_DIR}/"
 find "${TARGET_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-WHEEL_DIR="${OFFLINE_WHEEL_DIR:-${TARGET_DIR}/deploy/offline-wheels}"
 echo "[3/7] Installing Python dependencies"
-if [[ -d "${WHEEL_DIR}" ]] && compgen -G "${WHEEL_DIR}/*.whl" >/dev/null 2>&1; then
-  echo "Using offline wheelhouse: ${WHEEL_DIR}"
-  if ! "${PYTHON_BIN}" -m pip install --no-index --find-links "${WHEEL_DIR}" -r "${TARGET_DIR}/requirements.txt"; then
-    echo "Offline install failed, retrying with --break-system-packages"
-    "${PYTHON_BIN}" -m pip install --break-system-packages --no-index --find-links "${WHEEL_DIR}" -r "${TARGET_DIR}/requirements.txt"
-  fi
-else
+if ! install_from_wheel_dir "${TARGET_DIR}/deploy/offline-wheels"; then
   if ! "${PYTHON_BIN}" -m pip install -r "${TARGET_DIR}/requirements.txt"; then
     echo "Default pip install failed, retrying with --break-system-packages"
-    "${PYTHON_BIN}" -m pip install --break-system-packages -r "${TARGET_DIR}/requirements.txt"
+    if ! "${PYTHON_BIN}" -m pip install --break-system-packages -r "${TARGET_DIR}/requirements.txt"; then
+      BUNDLE_FILE="$(find_bundle_file || true)"
+      if [[ -n "${BUNDLE_FILE}" ]]; then
+        install_from_bundle "${BUNDLE_FILE}"
+      else
+        echo "No offline bundle found (sni-spoofing-offline-bundle-*.tar.gz)"
+        exit 1
+      fi
+    fi
   fi
 fi
 

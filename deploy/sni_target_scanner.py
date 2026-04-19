@@ -5,6 +5,7 @@ import argparse
 import ipaddress
 import json
 import socket
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,36 @@ from pathlib import Path
 
 
 DEFAULT_PORTS = [443, 2053, 2083, 2087, 2096, 8443]
+USE_COLOR = sys.stdout.isatty()
+
+
+def _paint(text: str, code: str) -> str:
+    if not USE_COLOR:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _hdr(title: str) -> None:
+    line = "=" * 72
+    print(_paint(line, "1;36"))
+    print(_paint(f" {title}", "1;36"))
+    print(_paint(line, "1;36"))
+
+
+def _ok(msg: str) -> None:
+    print(f"{_paint('[OK ]', '1;32')} {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"{_paint('[WARN]', '1;33')} {msg}")
+
+
+def _fail(msg: str) -> None:
+    print(f"{_paint('[FAIL]', '1;31')} {msg}")
+
+
+def _info(msg: str) -> None:
+    print(f"{_paint('[INFO]', '1;34')} {msg}")
 
 
 @dataclass
@@ -173,11 +204,11 @@ def _format_line(result: TargetResult) -> str:
     bits: list[str] = []
     for probe in result.probes:
         if probe.open:
-            lat = f"({probe.latency_ms}ms)" if probe.latency_ms is not None else ""
-            bits.append(f"{probe.port}[open]{lat}")
+            lat = f"@{probe.latency_ms}ms" if probe.latency_ms is not None else ""
+            bits.append(f"{probe.port}:OPEN{lat}")
         else:
-            bits.append(f"{probe.port}[closed]")
-    return f"{result.target} -> {result.ip} -> " + " ".join(bits)
+            bits.append(f"{probe.port}:CLOSED")
+    return f"{result.target:<28} -> {result.ip:<15} | " + " ".join(bits)
 
 
 def _save_reports(
@@ -288,58 +319,68 @@ def main() -> int:
         ports = DEFAULT_PORTS
 
     if not config_path.exists():
-        print(f"[ERR] missing config: {config_path}")
+        _fail(f"missing config: {config_path}")
         return 2
     if not targets_path.exists():
-        print(f"[ERR] missing targets file: {targets_path}")
+        _fail(f"missing targets file: {targets_path}")
         return 2
 
     targets = _load_targets(targets_path)
     if not targets:
-        print(f"[WARN] no targets in {targets_path}")
+        _warn(f"no targets in {targets_path}")
         return 1
 
-    print(f"[INFO] scanning {len(targets)} targets, ports={ports}, timeout={args.timeout}s")
+    _hdr("SNI TARGET SCANNER")
+    _info(f"targets={len(targets)} ports={ports} timeout={args.timeout}s")
+    _info(f"config={config_path}")
+    _info(f"targets_file={targets_path}")
+    _info(f"output_dir={output_dir}")
+    print("")
     scanned: list[TargetResult] = []
     resolve_failed: list[str] = []
 
-    for target in targets:
+    total_targets = len(targets)
+    for idx, target in enumerate(targets, start=1):
+        print(_paint(f"[{idx}/{total_targets}] target={target}", "1;37"))
         ips = _resolve_target(target)
         if not ips:
-            print(f"[RESOLVE FAIL] {target}")
+            _fail(f"resolve failed: {target}")
             resolve_failed.append(target)
             continue
         for ip in ips:
             result = _scan_target_ip(target, ip, ports, args.timeout)
             scanned.append(result)
-            state = "OK" if result.open_ports else "FAIL"
-            print(f"[{state}] {_format_line(result)}")
+            if result.open_ports:
+                _ok(_format_line(result))
+            else:
+                _fail(_format_line(result))
+        print("")
 
     best = _pick_best(scanned, ports)
     applied_changes: dict[str, str] = {}
 
     if best:
-        print("")
-        print("=== BEST CANDIDATE ===")
-        print(_format_line(best))
+        _hdr("BEST CANDIDATE")
+        print(_paint(_format_line(best), "1;32"))
         if args.apply_best:
             applied_changes = _apply_best_to_config(config_path, best, set_fake_sni=args.set_fake_sni_from_domain)
             if applied_changes:
-                print("[OK] config updated:")
+                _ok("config updated:")
                 for k, v in applied_changes.items():
-                    print(f"  {k}: {v}")
+                    print(f"  - {k}: {v}")
             else:
-                print("[OK] best candidate equals current config (no changes)")
+                _ok("best candidate equals current config (no changes)")
     else:
-        print("")
-        print("[WARN] no candidate with open port found.")
+        _warn("no candidate with open port found.")
 
     json_path, txt_path = _save_reports(output_dir, scanned, resolve_failed, best, applied_changes)
-    print("")
-    print("=== SUMMARY ===")
-    print(f"total_pairs={len(scanned)} ok_pairs={sum(1 for r in scanned if r.open_ports)} fail_pairs={sum(1 for r in scanned if not r.open_ports)} resolve_failed={len(resolve_failed)}")
-    print(f"report_json={json_path}")
-    print(f"report_txt={txt_path}")
+    _hdr("SUMMARY")
+    print(f"total_pairs   : {len(scanned)}")
+    print(f"ok_pairs      : {sum(1 for r in scanned if r.open_ports)}")
+    print(f"fail_pairs    : {sum(1 for r in scanned if not r.open_ports)}")
+    print(f"resolve_failed: {len(resolve_failed)}")
+    print(f"report_json   : {json_path}")
+    print(f"report_txt    : {txt_path}")
 
     if not best:
         return 1
