@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import queue
 import random
 import socket
@@ -13,6 +14,8 @@ from utils.humanize import human_delay_s
 
 if not IS_WINDOWS:
     import scapy.all as scapy
+
+log = logging.getLogger("fake_tcp")
 
 
 class FakeInjectiveConnection(MonitorConnection):
@@ -282,6 +285,10 @@ else:
                 )
                 / scapy.Raw(load=connection.fake_data)
             )
+            # In some paths, first forged packet can be lost or reordered.
+            # Sending a short burst improves delivery probability.
+            scapy.send(fake_packet, verbose=False)
+            time.sleep(0.001)
             scapy.send(fake_packet, verbose=False)
             connection.fake_sent = True
 
@@ -290,6 +297,39 @@ else:
             self._close_connection(connection)
             self._notify(connection, "unexpected_close")
             packet.drop()
+
+        @staticmethod
+        def _tcp_seq_is_before(left: int, right: int) -> bool:
+            delta = (right - left) & 0xffffffff
+            return 0 < delta < 0x80000000
+
+        def _is_post_fake_ack_progress(self, packet: Packet, connection: FakeInjectiveConnection) -> tuple[bool, str]:
+            if not connection.fake_sent:
+                return False, "fake_not_sent"
+            if not packet.tcp.ack or packet.tcp.syn or packet.tcp.rst or packet.tcp.fin:
+                return False, "not_ack_progress"
+            if connection.syn_ack_seq == -1:
+                return False, "missing_syn_ack_seq"
+
+            expected_seq = (connection.syn_ack_seq + 1) & 0xffffffff
+            expected_ack = (connection.syn_seq + 1) & 0xffffffff
+            seq_num = packet.tcp.seq_num
+            ack_num = packet.tcp.ack_num
+
+            if ack_num != expected_ack:
+                return False, "ack_not_matched"
+
+            # Normal expected post-fake ACK.
+            if seq_num == expected_seq:
+                return True, "exact_ack"
+
+            # Some stacks immediately piggyback data (PSH+ACK / payload).
+            if packet.tcp.psh or packet.tcp.payload_len > 0:
+                if self._tcp_seq_is_before(seq_num, expected_seq):
+                    return False, "seq_before_expected"
+                return True, "psh_or_payload_ack"
+
+            return False, "seq_not_matched"
 
         def on_inbound_packet(self, packet: Packet, connection: FakeInjectiveConnection):
             if connection.syn_seq == -1:
@@ -312,23 +352,32 @@ else:
                 packet.accept()
                 return
 
-            if packet.tcp.ack and (not packet.tcp.syn) and (not packet.tcp.rst) and (
-                    not packet.tcp.fin) and (not packet.tcp.psh) and packet.tcp.payload_len == 0 and connection.fake_sent:
-                seq_num = packet.tcp.seq_num
-                ack_num = packet.tcp.ack_num
-                if connection.syn_ack_seq == -1 or ((connection.syn_ack_seq + 1) & 0xffffffff) != seq_num:
-                    self.on_unexpected_packet(packet, connection,
-                                              "unexpected inbound ack packet, seq not matched!")
-                    return
-                if ack_num != ((connection.syn_seq + 1) & 0xffffffff):
-                    self.on_unexpected_packet(packet, connection,
-                                              "unexpected inbound ack packet, ack not matched!")
-                    return
+            ok, reason = self._is_post_fake_ack_progress(packet, connection)
+            if ok:
+                log.debug(
+                    "post-fake inbound accepted reason=%s seq=%d ack=%d psh=%s payload=%d",
+                    reason,
+                    packet.tcp.seq_num,
+                    packet.tcp.ack_num,
+                    packet.tcp.psh,
+                    packet.tcp.payload_len,
+                )
                 connection.monitor = False
                 self._notify(connection, "fake_data_ack_recv")
                 packet.accept()
                 return
 
+            if packet.tcp.ack and connection.fake_sent:
+                log.debug(
+                    "post-fake inbound rejected reason=%s seq=%d ack=%d psh=%s payload=%d expected_seq=%d expected_ack=%d",
+                    reason,
+                    packet.tcp.seq_num,
+                    packet.tcp.ack_num,
+                    packet.tcp.psh,
+                    packet.tcp.payload_len,
+                    (connection.syn_ack_seq + 1) & 0xffffffff if connection.syn_ack_seq != -1 else -1,
+                    (connection.syn_seq + 1) & 0xffffffff,
+                )
             self.on_unexpected_packet(packet, connection, "unexpected inbound packet")
 
         def on_outbound_packet(self, packet: Packet, connection: FakeInjectiveConnection):
