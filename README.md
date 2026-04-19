@@ -20,7 +20,7 @@ Support ongoing development:
 
 ## Showcase
 ![SNI Manager Showcase](docs/showcase/showcase1.png)
-![Connection_Proof](docs/showcase/showcase2.png)
+![Connection Proof](docs/showcase/showcase2.png)
 
 Ubuntu manager UI with grouped operations, scanner integration, and live service/config state.
 
@@ -155,6 +155,9 @@ Files:
 What it does:
 - Resolves target hostnames to IPv4
 - Probes ports (default: `443,2053,2083,2087,2096,8443`)
+- Ranks candidates by preferred port + latency
+- Optional E2E bypass validation on top candidates (service restart + local probe + journal analysis)
+- Auto-rollback to previous config if applied E2E result has zero relay success
 - Stores reports in:
   - `/var/log/sni-spoofing/scanner/sni-scan-*.json`
   - `/var/log/sni-spoofing/scanner/sni-scan-*.txt`
@@ -167,11 +170,15 @@ sudo python3 /opt/sni-spoofing/deploy/sni_target_scanner.py \
   --config /opt/sni-spoofing/config.json \
   --targets-file /opt/sni-spoofing/deploy/scanner_targets.txt \
   --output-dir /var/log/sni-spoofing/scanner \
+  --e2e-validate \
+  --e2e-service-unit sni-spoofing.service \
+  --e2e-top-k 3 \
+  --e2e-attempts 3 \
   --apply-best
 ```
 
 Manager shortcuts:
-- `24`: run scanner + apply best
+- `24`: run scanner (`TCP + E2E`) + apply best or auto-rollback
 - `25`: edit targets list
 - `26`: show latest report
 

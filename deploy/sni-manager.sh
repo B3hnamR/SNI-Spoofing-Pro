@@ -795,12 +795,20 @@ run_sni_scanner_apply_best() {
   echo -e "${C_BOLD}Running integrated scanner${C_RESET}"
   echo "  targets=${targets_file}"
   echo "  reports=${report_dir}"
+  echo "  mode=TCP pre-scan + E2E bypass validation + auto-rollback"
   echo
 
   "${PYTHON_BIN}" "${scanner_py}" \
     --config "${APP_CONFIG}" \
     --targets-file "${targets_file}" \
     --output-dir "${report_dir}" \
+    --e2e-validate \
+    --e2e-service-unit "${SERVICE_NAME}.service" \
+    --e2e-top-k 3 \
+    --e2e-attempts 3 \
+    --e2e-probe-timeout 2.0 \
+    --e2e-probe-hold 0.35 \
+    --e2e-settle 0.8 \
     --apply-best
 
   local rc=$?
@@ -814,11 +822,7 @@ run_sni_scanner_apply_best() {
   show_latest_scanner_report || true
   echo
   post_config_change_checks || true
-
-  read -r -p "Restart service now? [Y/n]: " ans
-  if [[ -z "${ans}" || "${ans}" =~ ^[Yy]$ ]]; then
-    restart_service
-  fi
+  info "Scanner E2E mode already handled service restarts for candidate validation/apply."
   return 0
 }
 
@@ -985,7 +989,7 @@ menu_loop() {
     menu_item "${C_CYAN}" "11" "Validate config"
     menu_item "${C_CYAN}" "12" "Quick config wizard"
     menu_item "${C_CYAN}" "13" "Edit config file"
-    menu_item "${C_CYAN}" "24" "Run SNI scanner + apply best to config"
+    menu_item "${C_CYAN}" "24" "Run SNI scanner (TCP+E2E) + apply best/rollback"
     menu_item "${C_CYAN}" "25" "Edit scanner targets list"
     menu_item "${C_CYAN}" "26" "Show latest scanner report"
 
