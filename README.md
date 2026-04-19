@@ -3,7 +3,7 @@ Bypass DPI with IP/TCP header manipulation.
 
 ## One-Line Install (Ubuntu Server)
 ```bash
-sudo bash -c 'set -e; cd /root; if [ ! -d SNI-Spoofing-Pro ]; then git clone https://github.com/B3hnamR/SNI-Spoofing-Pro.git; fi; cd SNI-Spoofing-Pro; git pull --ff-only; chmod +x deploy/sni-manager.sh; ./deploy/sni-manager.sh'
+sudo bash -c 'set -e; cd /root; rm -rf SNI-Spoofing-Pro-main; curl -fsSL https://github.com/B3hnamR/SNI-Spoofing-Pro/archive/refs/heads/main.tar.gz | tar -xz; chmod +x /root/SNI-Spoofing-Pro-main/deploy/sni-manager.sh; /root/SNI-Spoofing-Pro-main/deploy/sni-manager.sh'
 ```
 
 This command installs/updates and opens the interactive manager.
