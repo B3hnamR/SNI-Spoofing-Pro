@@ -798,6 +798,8 @@ run_sni_scanner_apply_best() {
   local scanner_py="${TARGET_DIR}/deploy/sni_target_scanner.py"
   local targets_file="${TARGET_DIR}/deploy/scanner_targets.txt"
   local report_dir="${APP_LOG_DIR}/scanner"
+  local scanner_help=""
+  local -a scanner_args=()
 
   if [[ ! -f "${scanner_py}" ]]; then
     err "Scanner script missing: ${scanner_py}"
@@ -806,24 +808,36 @@ run_sni_scanner_apply_best() {
   ensure_scanner_targets_file || return 1
   mkdir -p "${report_dir}"
 
+  scanner_args=(
+    --config "${APP_CONFIG}"
+    --targets-file "${targets_file}"
+    --output-dir "${report_dir}"
+    --apply-best
+  )
+
+  scanner_help="$("${PYTHON_BIN}" "${scanner_py}" --help 2>&1 || true)"
+
   echo -e "${C_BOLD}Running integrated scanner${C_RESET}"
   echo "  targets=${targets_file}"
   echo "  reports=${report_dir}"
-  echo "  mode=TCP pre-scan + E2E bypass validation + auto-rollback"
+  if grep -q -- "--e2e-validate" <<< "${scanner_help}"; then
+    echo "  mode=TCP pre-scan + E2E bypass validation + auto-rollback"
+    scanner_args+=(
+      --e2e-validate
+      --e2e-service-unit "${SERVICE_NAME}.service"
+      --e2e-top-k 3
+      --e2e-attempts 3
+      --e2e-probe-timeout 2.0
+      --e2e-probe-hold 0.35
+      --e2e-settle 0.8
+    )
+  else
+    warn "Scanner script is legacy (no E2E flags). Running TCP-only mode."
+    echo "  mode=TCP pre-scan (legacy scanner)"
+  fi
   echo
 
-  "${PYTHON_BIN}" "${scanner_py}" \
-    --config "${APP_CONFIG}" \
-    --targets-file "${targets_file}" \
-    --output-dir "${report_dir}" \
-    --e2e-validate \
-    --e2e-service-unit "${SERVICE_NAME}.service" \
-    --e2e-top-k 3 \
-    --e2e-attempts 3 \
-    --e2e-probe-timeout 2.0 \
-    --e2e-probe-hold 0.35 \
-    --e2e-settle 0.8 \
-    --apply-best
+  "${PYTHON_BIN}" "${scanner_py}" "${scanner_args[@]}"
 
   local rc=$?
   if [[ "${rc}" -ne 0 ]]; then
@@ -836,7 +850,7 @@ run_sni_scanner_apply_best() {
   show_latest_scanner_report || true
   echo
   post_config_change_checks || true
-  info "Scanner E2E mode already handled service restarts for candidate validation/apply."
+  info "Scanner completed. If this was legacy mode, run Option 20 to sync latest scanner into /opt."
   return 0
 }
 
