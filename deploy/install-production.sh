@@ -29,7 +29,25 @@ cp -a "${SOURCE_DIR}/." "${TARGET_DIR}/"
 find "${TARGET_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
 echo "[2/6] Installing Python dependencies"
-"${PYTHON_BIN}" -m pip install -r "${TARGET_DIR}/requirements.txt"
+if ! "${PYTHON_BIN}" -m pip install -r "${TARGET_DIR}/requirements.txt"; then
+  echo "Default pip install failed, retrying with --break-system-packages"
+  "${PYTHON_BIN}" -m pip install --break-system-packages -r "${TARGET_DIR}/requirements.txt"
+fi
+
+echo "[2.1/6] Verifying Python modules (netfilterqueue, scapy)"
+"${PYTHON_BIN}" - <<'PY'
+import importlib
+import sys
+
+checks = ("netfilterqueue", "scapy.all")
+for mod in checks:
+    try:
+        importlib.import_module(mod)
+    except Exception as exc:
+        print(f"missing {mod}: {exc!r}")
+        sys.exit(1)
+print("python-modules-ok")
+PY
 
 echo "[3/6] Preparing runtime logs"
 mkdir -p /var/log/sni-spoofing

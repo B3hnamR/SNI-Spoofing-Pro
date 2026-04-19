@@ -200,7 +200,7 @@ install_system_packages() {
   apt-get install -y \
     python3 python3-pip python3-dev \
     build-essential libpcap-dev libnetfilter-queue-dev \
-    iptables logrotate ca-certificates
+    iptables logrotate ca-certificates iputils-ping
 }
 
 sync_source_to_target() {
@@ -218,7 +218,35 @@ sync_source_to_target() {
 
 install_python_deps() {
   info "Installing Python dependencies"
-  "${PYTHON_BIN}" -m pip install -r "${APP_REQUIREMENTS}"
+  if "${PYTHON_BIN}" -m pip install -r "${APP_REQUIREMENTS}"; then
+    return 0
+  fi
+  warn "Default pip install failed. Retrying with --break-system-packages (Ubuntu PEP 668)."
+  "${PYTHON_BIN}" -m pip install --break-system-packages -r "${APP_REQUIREMENTS}"
+}
+
+verify_required_python_modules() {
+  info "Verifying Python modules: netfilterqueue, scapy"
+  "${PYTHON_BIN}" - <<'PY'
+import importlib
+
+checks = ("netfilterqueue", "scapy.all")
+missing = []
+
+for mod in checks:
+    try:
+        importlib.import_module(mod)
+    except Exception as exc:
+        missing.append((mod, repr(exc)))
+
+if missing:
+    print("python-modules-fail")
+    for mod, err in missing:
+        print(f"{mod}: {err}")
+    raise SystemExit(1)
+
+print("python-modules-ok")
+PY
 }
 
 install_service_file() {
@@ -279,22 +307,23 @@ bootstrap_install() {
     cp "${APP_CONFIG}" "${backup_temp}"
   fi
 
-  install_system_packages
-  sync_source_to_target
-  install_python_deps
-  prepare_runtime_dirs
-  install_service_file
-  install_logrotate_file
-  install_manager_link
+  install_system_packages || return 1
+  sync_source_to_target || return 1
+  install_python_deps || return 1
+  verify_required_python_modules || return 1
+  prepare_runtime_dirs || return 1
+  install_service_file || return 1
+  install_logrotate_file || return 1
+  install_manager_link || return 1
 
   if [[ -n "${backup_temp}" && -f "${backup_temp}" ]]; then
     merge_config_from_backup "${backup_temp}" || true
     rm -f "${backup_temp}"
   fi
 
-  systemctl daemon-reload
-  systemctl enable "${SERVICE_NAME}.service"
-  systemctl restart "${SERVICE_NAME}.service"
+  systemctl daemon-reload || return 1
+  systemctl enable "${SERVICE_NAME}.service" || return 1
+  systemctl restart "${SERVICE_NAME}.service" || return 1
 
   ok "Installation completed."
   ok "Run manager anytime with: sudo sni-manager"
@@ -432,6 +461,132 @@ print(f"nfqueue=num={cfg.nfqueue_num} maxlen={cfg.nfqueue_maxlen} fail_open={cfg
 PY
 }
 
+tcp_probe() {
+  local ip="$1"
+  local port="$2"
+  "${PYTHON_BIN}" - "${ip}" "${port}" <<'PY'
+import socket
+import sys
+
+ip = sys.argv[1]
+port = int(sys.argv[2])
+try:
+    with socket.create_connection((ip, port), timeout=2.5):
+        print(f"tcp-ok {ip}:{port}")
+except Exception as exc:
+    print(f"tcp-fail {ip}:{port} err={exc!r}")
+    raise SystemExit(1)
+PY
+}
+
+check_target_connectivity() {
+  local host ip port
+  host="$(config_get FAKE_SNI "")"
+  ip="$(config_get CONNECT_IP "")"
+  port="$(config_get CONNECT_PORT "443")"
+
+  local failed=0
+  local host_ips=""
+
+  echo -e "${C_BOLD}Target Connectivity Check${C_RESET}"
+  echo "${SEPARATOR}"
+  echo "  host=${host}"
+  echo "  ip=${ip}"
+  echo "  port=${port}"
+  echo
+
+  if [[ -n "${host}" ]]; then
+    host_ips="$(getent ahostsv4 "${host}" 2>/dev/null | awk '{print $1}' | sort -u)"
+    if [[ -n "${host_ips}" ]]; then
+      ok "DNS resolve for ${host}: $(echo "${host_ips}" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
+    else
+      warn "DNS resolve failed for ${host}"
+      failed=1
+    fi
+
+    if command -v ping >/dev/null 2>&1; then
+      if ping -c 1 -W 2 "${host}" >/dev/null 2>&1; then
+        ok "Ping host succeeded: ${host}"
+      else
+        warn "Ping host failed: ${host}"
+        failed=1
+      fi
+    else
+      warn "ping command is missing (install iputils-ping)"
+      failed=1
+    fi
+  else
+    warn "FAKE_SNI is empty"
+    failed=1
+  fi
+
+  if [[ -n "${ip}" ]]; then
+    if command -v ping >/dev/null 2>&1; then
+      if ping -c 1 -W 2 "${ip}" >/dev/null 2>&1; then
+        ok "Ping IP succeeded: ${ip}"
+      else
+        warn "Ping IP failed: ${ip}"
+        failed=1
+      fi
+    else
+      warn "ping command is missing (install iputils-ping)"
+      failed=1
+    fi
+
+    local tcp_msg=""
+    tcp_msg="$(tcp_probe "${ip}" "${port}" 2>&1)" && {
+      ok "${tcp_msg}"
+    } || {
+      warn "${tcp_msg}"
+      failed=1
+    }
+  else
+    warn "CONNECT_IP is empty"
+    failed=1
+  fi
+
+  if [[ -n "${host_ips}" && -n "${ip}" ]]; then
+    if printf '%s\n' "${host_ips}" | grep -Fxq "${ip}"; then
+      ok "CONNECT_IP is one of resolved host IPs."
+    else
+      warn "CONNECT_IP is not in current DNS resolution of ${host}."
+    fi
+  fi
+
+  if [[ "${failed}" -eq 0 ]]; then
+    ok "Connectivity check passed."
+    return 0
+  fi
+
+  warn "Connectivity check failed. Target may be unreachable from this server."
+  return 1
+}
+
+post_config_change_checks() {
+  local failed=0
+  echo
+  echo -e "${C_BOLD}Post-Change Validation${C_RESET}"
+  echo "${SEPARATOR}"
+
+  if validate_config; then
+    ok "Config validation passed."
+  else
+    warn "Config validation failed."
+    failed=1
+  fi
+  echo
+  if ! check_target_connectivity; then
+    failed=1
+  fi
+
+  if [[ "${failed}" -eq 0 ]]; then
+    ok "All post-change checks passed."
+    return 0
+  fi
+  warn "One or more post-change checks failed."
+  return 1
+}
+
 show_nfqueue_rules() {
   local tag
   tag="$(nfqueue_rule_tag)"
@@ -486,6 +641,99 @@ rotate_logs_now() {
   ok "Logrotate forced for ${SERVICE_NAME}."
 }
 
+repair_python_dependencies() {
+  info "Repairing runtime Python dependencies"
+  install_system_packages || return 1
+  install_python_deps || return 1
+  verify_required_python_modules || return 1
+  ok "Python dependency repair completed."
+}
+
+ensure_scanner_targets_file() {
+  local targets_file="${TARGET_DIR}/deploy/scanner_targets.txt"
+  if [[ -f "${targets_file}" ]]; then
+    return 0
+  fi
+  cat > "${targets_file}" <<EOF
+# One target per line (domain or IPv4)
+$(config_get FAKE_SNI "dashboard.hcaptcha.com")
+$(config_get CONNECT_IP "104.19.229.21")
+dashboard.hcaptcha.com
+104.19.229.21
+EOF
+  ok "Created scanner targets file: ${targets_file}"
+}
+
+edit_scanner_targets_file() {
+  ensure_scanner_targets_file || return 1
+  local targets_file="${TARGET_DIR}/deploy/scanner_targets.txt"
+  local editor=""
+  if command -v nano >/dev/null 2>&1; then
+    editor="nano"
+  elif command -v vim >/dev/null 2>&1; then
+    editor="vim"
+  else
+    editor="vi"
+  fi
+  "${editor}" "${targets_file}"
+}
+
+show_latest_scanner_report() {
+  local report_dir="${APP_LOG_DIR}/scanner"
+  local latest_txt
+  latest_txt="$(ls -1t "${report_dir}"/sni-scan-*.txt 2>/dev/null | head -n 1 || true)"
+  if [[ -z "${latest_txt}" ]]; then
+    warn "No scanner report found in ${report_dir}"
+    return 1
+  fi
+  echo -e "${C_BOLD}Latest Scanner Report${C_RESET}"
+  echo "${latest_txt}"
+  echo "${SEPARATOR}"
+  cat "${latest_txt}"
+}
+
+run_sni_scanner_apply_best() {
+  local scanner_py="${TARGET_DIR}/deploy/sni_target_scanner.py"
+  local targets_file="${TARGET_DIR}/deploy/scanner_targets.txt"
+  local report_dir="${APP_LOG_DIR}/scanner"
+
+  if [[ ! -f "${scanner_py}" ]]; then
+    err "Scanner script missing: ${scanner_py}"
+    return 1
+  fi
+  ensure_scanner_targets_file || return 1
+  mkdir -p "${report_dir}"
+
+  echo -e "${C_BOLD}Running integrated scanner${C_RESET}"
+  echo "  targets=${targets_file}"
+  echo "  reports=${report_dir}"
+  echo
+
+  "${PYTHON_BIN}" "${scanner_py}" \
+    --config "${APP_CONFIG}" \
+    --targets-file "${targets_file}" \
+    --output-dir "${report_dir}" \
+    --apply-best
+
+  local rc=$?
+  if [[ "${rc}" -ne 0 ]]; then
+    warn "Scanner finished with non-zero exit code: ${rc}"
+  else
+    ok "Scanner finished successfully."
+  fi
+
+  echo
+  show_latest_scanner_report || true
+  echo
+  post_config_change_checks || true
+
+  read -r -p "Restart service now? [Y/n]: " ans
+  if [[ -z "${ans}" || "${ans}" =~ ^[Yy]$ ]]; then
+    restart_service
+  fi
+  return 0
+}
+
 edit_config_file() {
   local editor=""
   if command -v nano >/dev/null 2>&1; then
@@ -496,6 +744,7 @@ edit_config_file() {
     editor="vi"
   fi
   "${editor}" "${APP_CONFIG}"
+  post_config_change_checks || true
 }
 
 prompt_with_default() {
@@ -553,6 +802,7 @@ quick_config_wizard() {
   done
 
   ok "Config updated."
+  post_config_change_checks || true
   read -r -p "Restart service now? [Y/n]: " ans
   if [[ -z "${ans}" || "${ans}" =~ ^[Yy]$ ]]; then
     restart_service
@@ -649,6 +899,11 @@ menu_loop() {
     echo "19) Force logrotate now"
     echo "20) Upgrade/Reinstall from current source"
     echo "21) Uninstall"
+    echo "22) Connectivity check (DNS + ping + TCP)"
+    echo "23) Repair Python deps (NetfilterQueue/Scapy)"
+    echo "24) Run SNI scanner + apply best to config"
+    echo "25) Edit scanner targets list"
+    echo "26) Show latest scanner report"
     echo " 0) Exit"
     echo
     read -r -p "Select option: " choice
@@ -671,10 +926,15 @@ menu_loop() {
       15) show_nfqueue_rules; pause ;;
       16) remove_nfqueue_rules_by_tag; pause ;;
       17) backup_config_file; pause ;;
-      18) restore_latest_config; restart_service; pause ;;
+      18) restore_latest_config; post_config_change_checks || true; restart_service; pause ;;
       19) rotate_logs_now; pause ;;
       20) upgrade_from_current_source; pause ;;
       21) uninstall_all; pause ;;
+      22) check_target_connectivity; pause ;;
+      23) repair_python_dependencies; restart_service; pause ;;
+      24) run_sni_scanner_apply_best; pause ;;
+      25) edit_scanner_targets_file; pause ;;
+      26) show_latest_scanner_report; pause ;;
       0) break ;;
       *) warn "Invalid option."; pause ;;
     esac
@@ -692,7 +952,10 @@ main() {
     exit 1
   fi
 
-  ensure_bootstrapped
+  ensure_bootstrapped || {
+    err "Bootstrap failed. Check previous error lines."
+    exit 1
+  }
   menu_loop
 }
 

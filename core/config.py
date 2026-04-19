@@ -101,7 +101,7 @@ def load_config() -> Config:
 
     connect_ip = raw["CONNECT_IP"]
     cfg = Config(
-        listen_host=raw.get("LISTEN_HOST", "0.0.0.0"),
+        listen_host=raw.get("LISTEN_HOST", "127.0.0.1"),
         listen_port=int(raw["LISTEN_PORT"]),
         connect_ip=connect_ip,
         connect_port=int(raw["CONNECT_PORT"]),

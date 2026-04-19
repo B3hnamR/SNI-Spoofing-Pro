@@ -54,7 +54,7 @@ sudo apt update
 sudo apt install -y \
   python3 python3-pip python3-dev \
   build-essential libpcap-dev libnetfilter-queue-dev \
-  iptables logrotate ca-certificates
+  iptables logrotate ca-certificates iputils-ping
 pip3 install -r requirements.txt
 ```
 
@@ -72,11 +72,11 @@ All runtime options are loaded from `config.json`.
 
 | Key | Default | Description |
 |---|---|---|
-| `LISTEN_HOST` | `0.0.0.0` | Local bind address for relay listener |
-| `LISTEN_PORT` | required | Local bind port |
-| `CONNECT_IP` | required | Upstream destination IP |
-| `CONNECT_PORT` | required | Upstream destination port |
-| `FAKE_SNI` | required | Fake SNI hostname used in injected TLS ClientHello |
+| `LISTEN_HOST` | `127.0.0.1` | Local bind address for relay listener |
+| `LISTEN_PORT` | `40443` | Local bind port |
+| `CONNECT_IP` | `104.19.229.21` | Upstream destination IP |
+| `CONNECT_PORT` | `443` | Upstream destination port |
+| `FAKE_SNI` | `dashboard.hcaptcha.com` | Fake SNI hostname used in injected TLS ClientHello |
 | `DATA_MODE` | `tls` | Data mode (currently only `tls`) |
 | `BYPASS_METHOD` | `wrong_seq` | Bypass method (currently only `wrong_seq`) |
 | `BYPASS_TIMEOUT` | `2.0` | Seconds to wait for bypass handshake completion |
@@ -119,6 +119,8 @@ Deployment assets:
 - `deploy/healthcheck.py`
 - `deploy/logrotate-sni-spoofing.conf`
 - `deploy/sni-manager.sh`
+- `deploy/sni_target_scanner.py`
+- `deploy/scanner_targets.txt`
 
 ### Option A: Unified Manager (Recommended)
 ```bash
@@ -130,6 +132,7 @@ sudo ./deploy/sni-manager.sh
 Behavior:
 - First run: installs packages/dependencies, deploys to `/opt/sni-spoofing`, installs systemd/logrotate, enables and starts service, then opens interactive menu.
 - Next runs: verifies installation and opens the interactive menu directly.
+- After config edits (wizard/manual), manager runs config validation plus target connectivity check automatically.
 
 Manager menu operations:
 1. Start service
@@ -153,6 +156,45 @@ Manager menu operations:
 19. Force logrotate
 20. Upgrade/reinstall from current source
 21. Uninstall
+22. Connectivity check (DNS + ping + TCP)
+23. Repair Python deps (NetfilterQueue/Scapy)
+24. Run SNI scanner + apply best to config
+25. Edit scanner targets list
+26. Show latest scanner report
+
+## Integrated SNI Scanner
+This project now includes an integrated scanner inspired by `seramo/sni-scanner`, implemented directly inside this repository.
+
+Files:
+- `deploy/sni_target_scanner.py`
+- `deploy/scanner_targets.txt`
+
+What it does:
+- reads domain/IP targets from `deploy/scanner_targets.txt`
+- resolves domains to IPv4 addresses
+- probes ports (default: `443,2053,2083,2087,2096,8443`)
+- stores full reports in:
+  - `/var/log/sni-spoofing/scanner/sni-scan-*.json`
+  - `/var/log/sni-spoofing/scanner/sni-scan-*.txt`
+- prints a summary at the end
+- can apply the best candidate directly to `config.json`:
+  - `CONNECT_IP`
+  - `CONNECT_PORT`
+  - `FAKE_SNI` (when best target is a domain)
+
+Run directly:
+```bash
+sudo python3 /opt/sni-spoofing/deploy/sni_target_scanner.py \
+  --config /opt/sni-spoofing/config.json \
+  --targets-file /opt/sni-spoofing/deploy/scanner_targets.txt \
+  --output-dir /var/log/sni-spoofing/scanner \
+  --apply-best
+```
+
+Or from manager menu:
+- Option `24` runs scanner, applies best result, saves report, and shows summary.
+- Option `25` edits targets list.
+- Option `26` shows latest saved scanner report.
 
 ### Option B: Non-interactive Installer
 ```bash

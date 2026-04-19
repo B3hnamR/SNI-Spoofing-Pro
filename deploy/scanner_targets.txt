@@ -1,0 +1,7 @@
+# One target per line (domain or IPv4).
+# The scanner resolves domains, probes configured ports, saves reports,
+# and can apply best candidate directly to config.json.
+
+dashboard.hcaptcha.com
+104.19.229.21
+auth.vercel.com

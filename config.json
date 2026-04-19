@@ -1,9 +1,9 @@
 {
-  "LISTEN_HOST": "0.0.0.0",
+  "LISTEN_HOST": "127.0.0.1",
   "LISTEN_PORT": 40443,
-  "CONNECT_IP": "188.114.98.0",
+  "CONNECT_IP": "104.19.229.21",
   "CONNECT_PORT": 443,
-  "FAKE_SNI": "auth.vercel.com",
+  "FAKE_SNI": "dashboard.hcaptcha.com",
   "NFQUEUE_NUM": 1,
   "NFQUEUE_MAXLEN": 4096,
   "NFQUEUE_FAIL_OPEN": true,
